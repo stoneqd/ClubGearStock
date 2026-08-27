@@ -19,7 +19,7 @@
 const { useState, useEffect, useMemo } = React;
 
 /* ============ CONFIGURE THIS ============ */
-const API_URL = "https://script.google.com/macros/s/AKfycbwzsTaUeBqIg0MQJDOZmtgGO-n4LH6KmXSyfw2wwtxEuwlapu4D86owLUkk7R115JM8-g/exec";
+const API_URL = "PASTE_YOUR_APPS_SCRIPT_EXEC_URL_HERE";
 const API_TOKEN = ""; // only needed if you set a TOKEN script property in Apps Script
 /* ========================================= */
 
@@ -50,6 +50,7 @@ const initials = (name) => (name || "?").trim().split(/\s+/).map((w) => w[0]).sl
 
 const LOW_STOCK = 5;
 const SIZES = ["XS", "S", "M", "L", "XL", "XXL", "One Size"];
+const SUGGESTED_CATEGORIES = ["T-Shirt", "Hoodie", "Cap", "Water Bottle", "Bag", "Other"];
 const DELIVERY_STEPS = ["processing", "shipped", "delivered"];
 const DELIVERY_LABEL = { processing: "Processing", shipped: "Shipped", delivered: "Delivered" };
 
@@ -170,6 +171,8 @@ function App() {
 
   const upsertProduct = (draft) => {
     if (!draft.name.trim()) return showToast("Give the item a name", "danger");
+    if (!draft.category.trim()) return showToast("Give the item a category", "danger");
+    if (!draft.size.trim()) return showToast("Give the item a size (or type \"One Size\")", "danger");
     if (draft.id) {
       saveProducts(products.map((p) => (p.id === draft.id ? { ...draft, stock: Number(draft.stock), price: Number(draft.price) } : p)));
       showToast("Item updated");
@@ -260,7 +263,7 @@ function App() {
       </aside>
 
       <main className="main">
-        {tab === "stock" && <StockView products={products} isAdmin={isAdmin} onAdd={() => setProductModal({ id: null, name: "", category: "T-Shirt", size: "M", price: "", stock: "" })} onEdit={(p) => setProductModal(p)} onAdjust={adjustStock} onDelete={(p) => setConfirmDelete(p)} />}
+        {tab === "stock" && <StockView products={products} isAdmin={isAdmin} onAdd={() => setProductModal({ id: null, name: "", category: "", size: "", price: "", stock: "" })} onEdit={(p) => setProductModal(p)} onAdjust={adjustStock} onDelete={(p) => setConfirmDelete(p)} />}
         {tab === "orders" && <OrdersView orders={orders} productMap={productMap} onNew={() => setOrderModal(true)} onPay={markPaid} onCancel={cancelOrder} onRefund={restockAndVoid} />}
         {tab === "deliveries" && <DeliveriesView orders={orders} onUpdate={updateDelivery} />}
         {tab === "team" && <TeamView users={users} currentUser={currentUser} isAdmin={isAdmin} onRoleChange={updateUserRole} onRemove={removeUser} />}
@@ -397,7 +400,12 @@ function ProductModal({ draft, onClose, onSave }) {
       <div className="modal-head"><h2>{form.id ? "Edit item" : "Add item"}</h2><button className="icon-btn" onClick={onClose}><X size={18} /></button></div>
       <div className="modal-body">
         <label>Name<input value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="Classic Club Tee" autoFocus /></label>
-        <div className="field-row"><label>Category<input value={form.category} onChange={(e) => set("category", e.target.value)} placeholder="T-Shirt" /></label><label>Size<select value={form.size} onChange={(e) => set("size", e.target.value)}>{SIZES.map((s) => <option key={s} value={s}>{s}</option>)}</select></label></div>
+        <div className="field-row">
+          <label>Category<input value={form.category} onChange={(e) => set("category", e.target.value)} placeholder="e.g. T-Shirt, Hoodie, Cap" list="category-options" /></label>
+          <label>Size<input value={form.size} onChange={(e) => set("size", e.target.value)} placeholder="e.g. M, 2XL, Youth L, One Size" list="size-options" /></label>
+        </div>
+        <datalist id="category-options">{SUGGESTED_CATEGORIES.map((c) => <option key={c} value={c} />)}</datalist>
+        <datalist id="size-options">{SIZES.map((s) => <option key={s} value={s} />)}</datalist>
         <div className="field-row"><label>Price<input type="number" min="0" step="0.01" value={form.price} onChange={(e) => set("price", e.target.value)} placeholder="25.00" /></label><label>Stock on hand<input type="number" min="0" step="1" value={form.stock} onChange={(e) => set("stock", e.target.value)} placeholder="0" /></label></div>
       </div>
       <div className="modal-foot"><button className="btn btn-ghost" onClick={onClose}>Cancel</button><button className="btn btn-primary" onClick={() => onSave(form)}>Save item</button></div>
@@ -441,6 +449,7 @@ function OrderModal({ products, onClose, onCreate }) {
   const [error, setError] = useState("");
   const available = products.filter((p) => p.stock > 0);
   const selected = products.find((p) => p.id === productId);
+  const groupedAvailable = available.reduce((acc, p) => { (acc[p.category] = acc[p.category] || []).push(p); return acc; }, {});
   const addToCart = () => {
     if (!selected) return setError("Pick an item first");
     const inCart = cart.filter((c) => c.productId === selected.id).reduce((s, c) => s + c.qty, 0);
@@ -458,7 +467,20 @@ function OrderModal({ products, onClose, onCreate }) {
       <div className="modal-body">
         <div className="field-row"><label>Customer name<input value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="Jamie Lee" autoFocus /></label><label>Contact (optional)<input value={customerContact} onChange={(e) => setCustomerContact(e.target.value)} placeholder="email or phone" /></label></div>
         <div className="divider" />
-        <div className="field-row"><label>Item<select value={productId} onChange={(e) => setProductId(e.target.value)}>{available.length === 0 && <option value="">No stock available</option>}{available.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.size}) — {p.stock} left</option>)}</select></label><label>Qty<input type="number" min="1" value={qty} onChange={(e) => setQty(e.target.value)} /></label><button className="btn btn-ghost" style={{ alignSelf: "flex-end" }} onClick={addToCart}>Add</button></div>
+        <div className="field-row">
+          <label>Item
+            <select value={productId} onChange={(e) => setProductId(e.target.value)}>
+              {available.length === 0 && <option value="">No stock available</option>}
+              {Object.entries(groupedAvailable).map(([cat, items]) => (
+                <optgroup key={cat} label={cat}>
+                  {items.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.size}) — {p.stock} left</option>)}
+                </optgroup>
+              ))}
+            </select>
+          </label>
+          <label>Qty<input type="number" min="1" value={qty} onChange={(e) => setQty(e.target.value)} /></label>
+          <button className="btn btn-ghost" style={{ alignSelf: "flex-end" }} onClick={addToCart}>Add</button>
+        </div>
         {error && <div className="form-error"><AlertTriangle size={14} /> {error}</div>}
         {cart.length > 0 && (<div className="cart">{cart.map((c, i) => (<div key={i} className="cart-row"><span>{c.qty}× {c.name} ({c.size})</span><span className="cart-row-right">{money(c.qty * c.price)} <button className="icon-btn sm" onClick={() => removeItem(i)}><Trash2 size={14} /></button></span></div>))}<div className="cart-total">Total <strong>{money(total)}</strong></div></div>)}
       </div>
