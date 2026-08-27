@@ -15,11 +15,11 @@
 <body>
 <div id="root"></div>
 
-<script type="module" src="./app.js"></script>
+<script type="text/plain" id="app-source">
 const { useState, useEffect, useMemo } = React;
 
 /* ============ CONFIGURE THIS ============ */
-const API_URL = "https://script.google.com/macros/s/AKfycbwyoVfLUCWBv_2tCWhiVkacaAyJD8n4jVasoxrw47ZHbozwvr17CtgmrKbh35jB-VejGw/exec";
+const API_URL = "PASTE_YOUR_APPS_SCRIPT_EXEC_URL_HERE";
 const API_TOKEN = ""; // only needed if you set a TOKEN script property in Apps Script
 /* ========================================= */
 
@@ -649,6 +649,20 @@ document.head.appendChild(styleTag);
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(<App />);
+</script>
+
+<script>
+  // Manually compile the JSX above using Babel's classic runtime (React.createElement),
+  // instead of Babel's auto-scanning of type="text/babel" tags. Newer Babel Standalone
+  // versions default that auto-scan to the "automatic" JSX runtime, which injects a real
+  // `import` statement the browser can't run as a classic script. Doing it ourselves avoids that.
+  const src = document.getElementById("app-source").textContent;
+  const compiled = Babel.transform(src, {
+    presets: [["react", { runtime: "classic" }]],
+  }).code;
+  const script = document.createElement("script");
+  script.textContent = compiled;
+  document.body.appendChild(script);
 </script>
 </body>
 </html>
