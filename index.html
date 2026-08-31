@@ -19,7 +19,7 @@
 const { useState, useEffect, useMemo } = React;
 
 /* ============ CONFIGURE THIS ============ */
-const API_URL = "https://script.google.com/macros/s/AKfycbxJ5B4Z2mZpeSjA9X28shThGRIT7FGw6xCIl4DOmCqfUNsD6ONkxUgQbcOa0cytdzbk6w/exec";
+const API_URL = "PASTE_YOUR_APPS_SCRIPT_EXEC_URL_HERE";
 const API_TOKEN = ""; // only needed if you set a TOKEN script property in Apps Script
 /* ========================================= */
 
@@ -202,6 +202,15 @@ function App() {
     saveUsers(users.filter((u) => u.id !== id));
     if (currentUser?.id === id) logout();
     showToast("Teammate removed");
+  };
+  const addTeammate = (name, role, pin) => {
+    const trimmed = name.trim();
+    if (!trimmed) { showToast("Enter a name", "danger"); return false; }
+    if (users.some((u) => u.name.toLowerCase() === trimmed.toLowerCase())) { showToast("That name's already taken", "danger"); return false; }
+    const account = { id: uid(), name: trimmed, role, pin: pin ? pin.trim() : "", createdAt: now() };
+    saveUsers([...users, account]);
+    showToast(`Account created for ${trimmed}`);
+    return true;
   };
 
   // ---------- Presets ----------
@@ -386,7 +395,7 @@ function App() {
         {tab === "stock" && <StockView products={products} isAdmin={isAdmin} presets={presets} onAdd={() => setProductModal({ id: null, name: "", category: "", size: "", price: "", stock: "" })} onEdit={(p) => setProductModal(p)} onAdjust={adjustStock} onDelete={(p) => setConfirmDelete(p)} />}
         {tab === "orders" && <OrdersView orders={orders} productMap={productMap} isAdmin={isAdmin} isSuperAdmin={isSuperAdmin} onNew={() => setOrderModal(true)} onPay={markPaid} onCancel={cancelOrder} onRefund={restockAndVoid} onDelete={(o) => setConfirmDeleteOrder(o)} />}
         {tab === "deliveries" && <DeliveriesView orders={orders} onComplete={markDeliveryCompleted} onUndo={unmarkDeliveryCompleted} />}
-        {tab === "team" && <TeamView users={users} currentUser={currentUser} isSuperAdmin={isSuperAdmin} onRoleChange={updateUserRole} onRemove={removeUser} />}
+        {tab === "team" && <TeamView users={users} currentUser={currentUser} isSuperAdmin={isSuperAdmin} onRoleChange={updateUserRole} onRemove={removeUser} onAddTeammate={addTeammate} />}
         {tab === "settings" && <SettingsView presets={presets} isAdmin={isAdmin} onAddCategory={addCategory} onRemoveCategory={removeCategory} onAddName={addName} onRemoveName={removeName} onAddSize={addSize} onRemoveSize={removeSize} />}
       </main>
 
@@ -563,16 +572,15 @@ function LoginScreen({ users, onCreateAccount, onLogin, onTrackOrder, onPlaceOrd
       </div></div>
     );
   }
-  if (mode === "create") {
+  if (mode === "create" && users.length === 0) {
     return (
       <div className="login-wrap"><div className="login-card">
         <span className="brand-mark lg">RP</span>
-        <h2>{users.length === 0 ? "Set up Rotorua Pickleball Club Gear" : "New teammate"}</h2>
-        <p className="sub">{users.length === 0 ? "Create the first account — it becomes the Super Admin." : "New accounts start as Staff. A Super Admin can promote you from the Team tab if needed."}</p>
+        <h2>Set up Rotorua Pickleball Club Gear</h2>
+        <p className="sub">Create the first account — it becomes the Super Admin. After this, only a Super Admin can create further accounts, from the Team tab.</p>
         <label>Name<input value={name} onChange={(e) => setName(e.target.value)} placeholder="Jamie Lee" autoFocus /></label>
         <label>PIN (optional)<input type="password" inputMode="numeric" maxLength={8} value={pin} onChange={(e) => setPin(e.target.value)} placeholder="Leave blank for none" /></label>
-        <button className="btn btn-primary" style={{ width: "100%", justifyContent: "center", marginTop: 6 }} onClick={() => onCreateAccount(name, users.length === 0 ? "superadmin" : "staff", pin)}>Create account</button>
-        {users.length > 0 && <button className="link-btn" style={{ marginTop: 12 }} onClick={() => setMode("pick")}>Back to team list</button>}
+        <button className="btn btn-primary" style={{ width: "100%", justifyContent: "center", marginTop: 6 }} onClick={() => onCreateAccount(name, "superadmin", pin)}>Create account</button>
         <p className="disclaimer"><AlertTriangle size={12} /> Named accounts for accountability, not secure login — don't reuse a real password as the PIN.</p>
       </div></div>
     );
@@ -589,7 +597,6 @@ function LoginScreen({ users, onCreateAccount, onLogin, onTrackOrder, onPlaceOrd
           </button>
         ))}
       </div>
-      <button className="btn btn-ghost" style={{ width: "100%", justifyContent: "center", marginTop: 4 }} onClick={() => setMode("create")}><Plus size={14} /> Add teammate</button>
       <button className="link-btn" style={{ marginTop: 14 }} onClick={onPlaceOrder}>Customer? Place an order</button>
       <button className="link-btn" style={{ marginTop: 6 }} onClick={onTrackOrder}>Customer? Track your order</button>
       <p className="disclaimer"><AlertTriangle size={12} /> Named accounts for accountability, not secure login.</p>
@@ -598,11 +605,12 @@ function LoginScreen({ users, onCreateAccount, onLogin, onTrackOrder, onPlaceOrd
 }
 
 // ---------------- Team ----------------
-function TeamView({ users, currentUser, isSuperAdmin, onRoleChange, onRemove }) {
+function TeamView({ users, currentUser, isSuperAdmin, onRoleChange, onRemove, onAddTeammate }) {
   return (
     <div>
       <div className="view-header"><div><h1>Team</h1><p className="sub">{users.length} account{users.length === 1 ? "" : "s"} on this board</p></div></div>
-      {!isSuperAdmin && <p className="sub" style={{ marginBottom: 14 }}>Only a Super Admin can change roles or remove teammates.</p>}
+      {isSuperAdmin && <AddTeammateForm onAdd={onAddTeammate} />}
+      {!isSuperAdmin && <p className="sub" style={{ marginBottom: 14 }}>Only a Super Admin can create accounts, change roles, or remove teammates.</p>}
       <div className="order-list">
         {users.map((u) => (
           <div key={u.id} className="order-card team-row">
@@ -620,6 +628,32 @@ function TeamView({ users, currentUser, isSuperAdmin, onRoleChange, onRemove }) 
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+function AddTeammateForm({ onAdd }) {
+  const [name, setName] = useState("");
+  const [pin, setPin] = useState("");
+  const [role, setRole] = useState("staff");
+  const submit = () => {
+    if (!onAdd(name, role, pin)) return;
+    setName(""); setPin(""); setRole("staff");
+  };
+  return (
+    <div className="group">
+      <div className="group-title">Add a teammate</div>
+      <div className="field-row">
+        <label>Name<input value={name} onChange={(e) => setName(e.target.value)} placeholder="Jamie Lee" /></label>
+        <label>PIN<input type="password" inputMode="numeric" maxLength={8} value={pin} onChange={(e) => setPin(e.target.value)} placeholder="e.g. 1234" /></label>
+        <label>Role
+          <select value={role} onChange={(e) => setRole(e.target.value)}>
+            <option value="staff">Staff</option>
+            <option value="admin">Admin</option>
+            <option value="superadmin">Super Admin</option>
+          </select>
+        </label>
+      </div>
+      <button className="btn btn-primary btn-sm" onClick={submit}><Plus size={14} /> Create account</button>
     </div>
   );
 }
