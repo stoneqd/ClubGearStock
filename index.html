@@ -19,7 +19,7 @@
 const { useState, useEffect, useMemo } = React;
 
 /* ============ CONFIGURE THIS ============ */
-const API_URL = "https://script.google.com/macros/s/AKfycbxJ5B4Z2mZpeSjA9X28shThGRIT7FGw6xCIl4DOmCqfUNsD6ONkxUgQbcOa0cytdzbk6w/exec";
+const API_URL = "PASTE_YOUR_APPS_SCRIPT_EXEC_URL_HERE";
 const API_TOKEN = ""; // only needed if you set a TOKEN script property in Apps Script
 /* ========================================= */
 
@@ -62,6 +62,17 @@ function normalizePresets(loaded) {
     names: loaded.names || base.names,
     generalSizes: loaded.generalSizes || loaded.sizes || base.generalSizes,
     sizesByCategory: loaded.sizesByCategory || {},
+  };
+}
+
+// Migrates old single-price items to the member/non-member model — if a product only
+// ever had `price`, use it as both tiers until an admin sets them separately.
+function normalizeProduct(p) {
+  const legacy = p.price !== undefined ? Number(p.price) : 0;
+  return {
+    ...p,
+    memberPrice: p.memberPrice !== undefined ? Number(p.memberPrice) : legacy,
+    nonMemberPrice: p.nonMemberPrice !== undefined ? Number(p.nonMemberPrice) : legacy,
   };
 }
 
@@ -126,7 +137,7 @@ function App() {
         const u = await storage.get("club-gear-users");
         const pr = await storage.get("club-gear-presets");
         const log = await storage.get("club-gear-audit-log");
-        setProducts(p ? JSON.parse(p.value) : []);
+        setProducts(p ? JSON.parse(p.value).map(normalizeProduct) : []);
         setOrders(o ? JSON.parse(o.value) : []);
         setUsers(u ? JSON.parse(u.value) : []);
         setPresets(normalizePresets(pr ? JSON.parse(pr.value) : null));
@@ -272,12 +283,14 @@ function App() {
     if (!draft.name.trim()) return showToast("Give the item a name", "danger");
     if (!draft.category.trim()) return showToast("Give the item a category", "danger");
     if (!draft.size.trim()) return showToast("Give the item a size (or type \"One Size\")", "danger");
+    const clean = { ...draft, stock: Number(draft.stock) || 0, memberPrice: Number(draft.memberPrice) || 0, nonMemberPrice: Number(draft.nonMemberPrice) || 0 };
+    delete clean.price;
     if (draft.id) {
-      saveProducts(products.map((p) => (p.id === draft.id ? { ...draft, stock: Number(draft.stock), price: Number(draft.price) } : p)));
+      saveProducts(products.map((p) => (p.id === draft.id ? clean : p)));
       showToast("Item updated");
       logAction("Item edited", `${draft.name} (${draft.category}, ${draft.size})`);
     } else {
-      saveProducts([...products, { ...draft, id: uid(), stock: Number(draft.stock) || 0, price: Number(draft.price) || 0, addedBy: currentUser.name }]);
+      saveProducts([...products, { ...clean, id: uid(), addedBy: currentUser.name }]);
       showToast("Item added to stock");
       logAction("Item added", `${draft.name} (${draft.category}, ${draft.size}) · stock ${draft.stock || 0}`);
     }
@@ -297,18 +310,18 @@ function App() {
   };
 
   // ---------- Orders ----------
-  const buildOrder = (customerName, customerContact, items, createdByLabel) => {
+  const buildOrder = (customerName, customerContact, items, createdByLabel, isMember) => {
     if (!customerName.trim()) return { error: "Add a customer name" };
     if (items.length === 0) return { error: "Add at least one item" };
     const shortages = items.filter((it) => { const live = productMap[it.productId]; return !live || live.stock < it.qty; });
     if (shortages.length) return { error: `Not enough stock for ${shortages.map((s) => s.name).join(", ")}` };
     const total = items.reduce((s, it) => s + it.qty * it.price, 0);
-    const order = { id: uid(), orderNo: "ORD-" + Date.now().toString().slice(-6), customerName: customerName.trim(), customerContact: customerContact.trim(), items, total, status: "unpaid", createdAt: now(), createdBy: createdByLabel, paidAt: null, paidBy: null, delivery: null };
+    const order = { id: uid(), orderNo: "ORD-" + Date.now().toString().slice(-6), customerName: customerName.trim(), customerContact: customerContact.trim(), isMember: !!isMember, items, total, status: "unpaid", createdAt: now(), createdBy: createdByLabel, paidAt: null, paidBy: null, delivery: null };
     return { order };
   };
 
-  const createOrder = (customerName, customerContact, items) => {
-    const { order, error } = buildOrder(customerName, customerContact, items, currentUser.name);
+  const createOrder = (customerName, customerContact, items, isMember) => {
+    const { order, error } = buildOrder(customerName, customerContact, items, currentUser.name, isMember);
     if (error) { showToast(error, "danger"); return false; }
     saveOrders([order, ...orders]);
     showToast("Order created — stock reserved once paid");
@@ -316,9 +329,9 @@ function App() {
     return true;
   };
 
-  const submitPublicOrder = (customerName, customerContact, items) => {
+  const submitPublicOrder = (customerName, customerContact, items, isMember) => {
     if (!customerContact.trim()) return { error: "Add an email or phone number so the club can reach you" };
-    const { order, error } = buildOrder(customerName, customerContact, items, "Customer (online form)");
+    const { order, error } = buildOrder(customerName, customerContact, items, "Customer (online form)", isMember);
     if (error) return { error };
     saveOrders([order, ...orders]);
     logAction("Order created (customer form)", `${order.orderNo} · ${order.customerName} · ${money(order.total)}`);
@@ -435,7 +448,7 @@ function App() {
       </aside>
 
       <main className="main">
-        {tab === "stock" && <StockView products={products} isAdmin={isAdmin} presets={presets} onAdd={() => setProductModal({ id: null, name: "", category: "", size: "", price: "", stock: "" })} onEdit={(p) => setProductModal(p)} onAdjust={adjustStock} onDelete={(p) => setConfirmDelete(p)} />}
+        {tab === "stock" && <StockView products={products} isAdmin={isAdmin} presets={presets} onAdd={() => setProductModal({ id: null, name: "", category: "", size: "", memberPrice: "", nonMemberPrice: "", stock: "" })} onEdit={(p) => setProductModal(p)} onAdjust={adjustStock} onDelete={(p) => setConfirmDelete(p)} />}
         {tab === "orders" && <OrdersView orders={orders} productMap={productMap} isAdmin={isAdmin} isSuperAdmin={isSuperAdmin} onNew={() => setOrderModal(true)} onPay={markPaid} onCancel={cancelOrder} onRefund={restockAndVoid} onDelete={(o) => setConfirmDeleteOrder(o)} />}
         {tab === "deliveries" && <DeliveriesView orders={orders} onComplete={markDeliveryCompleted} onUndo={unmarkDeliveryCompleted} />}
         {tab === "team" && <TeamView users={users} currentUser={currentUser} isSuperAdmin={isSuperAdmin} onRoleChange={updateUserRole} onRemove={removeUser} onAddTeammate={addTeammate} />}
@@ -444,7 +457,7 @@ function App() {
       </main>
 
       {productModal && <ProductModal draft={productModal} presets={presets} products={products} onClose={() => setProductModal(null)} onSave={upsertProduct} />}
-      {orderModal && <OrderModal products={products} onClose={() => setOrderModal(false)} onCreate={(name, contact, items) => { if (createOrder(name, contact, items)) setOrderModal(false); }} />}
+      {orderModal && <OrderModal products={products} onClose={() => setOrderModal(false)} onCreate={(name, contact, items, isMember) => { if (createOrder(name, contact, items, isMember)) setOrderModal(false); }} />}
       {confirmDelete && <ConfirmModal title={`Remove "${confirmDelete.name}"?`} body="This deletes the item from stock. Past orders keep their own record of it." onCancel={() => setConfirmDelete(null)} onConfirm={() => deleteProduct(confirmDelete.id)} />}
       {confirmDeleteOrder && <ConfirmModal title={`Delete order ${confirmDeleteOrder.orderNo}?`} body="This permanently removes the order and its delivery record. This can't be undone once you navigate away from the confirmation." onCancel={() => setConfirmDeleteOrder(null)} onConfirm={() => { deleteOrderRecord(confirmDeleteOrder.id); setConfirmDeleteOrder(null); }} />}
       {toast && (
@@ -470,6 +483,7 @@ function NavItem({ icon, label, active, onClick, count, countLabel }) {
 function PublicOrderForm({ products, onSubmit, onTrack }) {
   const [customerName, setCustomerName] = useState("");
   const [customerContact, setCustomerContact] = useState("");
+  const [isMember, setIsMemberRaw] = useState(false);
   const [productId, setProductId] = useState("");
   const [qty, setQty] = useState(1);
   const [cart, setCart] = useState([]);
@@ -480,6 +494,14 @@ function PublicOrderForm({ products, onSubmit, onTrack }) {
   const grouped = available.reduce((acc, p) => { (acc[p.category] = acc[p.category] || []).push(p); return acc; }, {});
   const selected = products.find((p) => p.id === productId);
   const total = cart.reduce((s, c) => s + c.qty * c.price, 0);
+  const priceFor = (p) => (isMember ? p.memberPrice : p.nonMemberPrice);
+  const setIsMember = (val) => {
+    setIsMemberRaw(val);
+    setCart((c) => c.map((item) => {
+      const prod = products.find((p) => p.id === item.productId);
+      return prod ? { ...item, price: val ? prod.memberPrice : prod.nonMemberPrice } : item;
+    }));
+  };
 
   const addToCart = () => {
     if (!selected) return setError("Pick an item first");
@@ -487,13 +509,13 @@ function PublicOrderForm({ products, onSubmit, onTrack }) {
     if (inCart + Number(qty) > selected.stock) return setError(`Only ${selected.stock - inCart} left of ${selected.name}`);
     if (Number(qty) <= 0) return setError("Quantity must be at least 1");
     setError("");
-    setCart((c) => [...c, { productId: selected.id, name: selected.name, size: selected.size, price: selected.price, qty: Number(qty) }]);
+    setCart((c) => [...c, { productId: selected.id, name: selected.name, size: selected.size, price: priceFor(selected), qty: Number(qty) }]);
     setQty(1);
   };
   const removeItem = (i) => setCart((c) => c.filter((_, idx) => idx !== i));
 
   const submit = () => {
-    const result = onSubmit(customerName, customerContact, cart);
+    const result = onSubmit(customerName, customerContact, cart, isMember);
     if (result.error) { setError(result.error); return; }
     setConfirmed(result.order);
   };
@@ -519,6 +541,12 @@ function PublicOrderForm({ products, onSubmit, onTrack }) {
 
       <label>Your name<input value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="Jamie Lee" /></label>
       <label>Email or phone<input value={customerContact} onChange={(e) => setCustomerContact(e.target.value)} placeholder="so we can reach you" /></label>
+      <label>Are you a club member?
+        <div className="view-toggle" style={{ marginTop: 4 }}>
+          <button type="button" className={`view-toggle-btn ${!isMember ? "active" : ""}`} onClick={() => setIsMember(false)}>No</button>
+          <button type="button" className={`view-toggle-btn ${isMember ? "active" : ""}`} onClick={() => setIsMember(true)}>Yes, I'm a member</button>
+        </div>
+      </label>
 
       <div className="divider" />
 
@@ -528,7 +556,7 @@ function PublicOrderForm({ products, onSubmit, onTrack }) {
             <option value="">Choose an item...</option>
             {Object.entries(grouped).map(([cat, items]) => (
               <optgroup key={cat} label={cat}>
-                {items.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.size}) — {money(p.price)}</option>)}
+                {items.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.size}) — {money(priceFor(p))}</option>)}
               </optgroup>
             ))}
           </select>
@@ -849,7 +877,7 @@ function StockView({ products, isAdmin, presets, onAdd, onEdit, onAdjust, onDele
       ) : view === "table" ? (
         <div className="table-scroll">
           <table className="stock-table">
-            <thead><tr><th>Name</th><th>Category</th><th>Size</th><th>Price</th><th>Stock</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>Category</th><th>Size</th><th>Member $</th><th>Non-member $</th><th>Stock</th><th>Status</th><th></th></tr></thead>
             <tbody>
               {filtered.map((p) => {
                 const tone = stockTone(p.stock);
@@ -858,7 +886,8 @@ function StockView({ products, isAdmin, presets, onAdd, onEdit, onAdjust, onDele
                     <td>{p.name}</td>
                     <td>{p.category}</td>
                     <td>{p.size}</td>
-                    <td>{money(p.price)}</td>
+                    <td>{money(p.memberPrice)}</td>
+                    <td>{money(p.nonMemberPrice)}</td>
                     <td>
                       {isAdmin ? (
                         <div className="stock-count-row" style={{ margin: 0 }}>
@@ -888,7 +917,7 @@ function StockView({ products, isAdmin, presets, onAdd, onEdit, onAdjust, onDele
                 const tone = stockTone(p.stock);
                 return (
                   <div key={p.id} className="stock-card">
-                    <div className="stock-card-top"><div><div className="stock-name">{p.name}</div><div className="stock-meta">Size {p.size} · {money(p.price)}</div></div><span className={`pill ${tone.cls}`}>{tone.label}</span></div>
+                    <div className="stock-card-top"><div><div className="stock-name">{p.name}</div><div className="stock-meta">Size {p.size}</div><div className="stock-meta">Member {money(p.memberPrice)} · Non-member {money(p.nonMemberPrice)}</div></div><span className={`pill ${tone.cls}`}>{tone.label}</span></div>
                     {isAdmin ? (
                       <div className="stock-count-row"><button className="qty-btn" onClick={() => onAdjust(p.id, -1)} disabled={p.stock <= 0}>−</button><div className="stock-count">{p.stock}</div><button className="qty-btn" onClick={() => onAdjust(p.id, 1)}>+</button><span className="stock-count-label">in stock</span></div>
                     ) : (
@@ -925,7 +954,11 @@ function ProductModal({ draft, presets, products, onClose, onSave }) {
         <datalist id="name-options">{nameOptions.map((n) => <option key={n} value={n} />)}</datalist>
         <datalist id="category-options">{presets.categories.map((c) => <option key={c} value={c} />)}</datalist>
         <datalist id="size-options">{sizeOptions.map((s) => <option key={s} value={s} />)}</datalist>
-        <div className="field-row"><label>Price<input type="number" min="0" step="0.01" value={form.price} onChange={(e) => set("price", e.target.value)} placeholder="25.00" /></label><label>Stock on hand<input type="number" min="0" step="1" value={form.stock} onChange={(e) => set("stock", e.target.value)} placeholder="0" /></label></div>
+        <div className="field-row">
+          <label>Member price<input type="number" min="0" step="0.01" value={form.memberPrice} onChange={(e) => set("memberPrice", e.target.value)} placeholder="20.00" /></label>
+          <label>Non-member price<input type="number" min="0" step="0.01" value={form.nonMemberPrice} onChange={(e) => set("nonMemberPrice", e.target.value)} placeholder="25.00" /></label>
+        </div>
+        <div className="field-row"><label>Stock on hand<input type="number" min="0" step="1" value={form.stock} onChange={(e) => set("stock", e.target.value)} placeholder="0" /></label></div>
       </div>
       <div className="modal-foot"><button className="btn btn-ghost" onClick={onClose}>Cancel</button><button className="btn btn-primary" onClick={() => onSave(form)}>Save item</button></div>
     </div></div>
@@ -962,7 +995,7 @@ function OrdersView({ orders, productMap, isAdmin, isSuperAdmin, onNew, onPay, o
                 return (
                   <tr key={o.id}>
                     <td>{o.orderNo}</td>
-                    <td>{o.customerName}</td>
+                    <td>{o.customerName}{o.isMember ? " (Member)" : ""}</td>
                     <td style={{ maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={itemsSummary}>{itemsSummary}</td>
                     <td>{money(o.total)}</td>
                     <td><span className={`pill status-${o.status}`}>{o.status}</span></td>
@@ -982,7 +1015,7 @@ function OrdersView({ orders, productMap, isAdmin, isSuperAdmin, onNew, onPay, o
         <div className="order-list">
           {visible.map((o) => (
             <div key={o.id} className="order-card">
-              <div className="order-card-top"><div><div className="order-no">{o.orderNo} <span className={`pill status-${o.status}`}>{o.status}</span></div><div className="stock-meta">{o.customerName}{o.customerContact ? ` · ${o.customerContact}` : ""} · {fmtDate(o.createdAt)}{o.createdBy ? ` · by ${o.createdBy}` : ""}</div></div><div className="order-total">{money(o.total)}</div></div>
+              <div className="order-card-top"><div><div className="order-no">{o.orderNo} <span className={`pill status-${o.status}`}>{o.status}</span>{o.isMember && <span className="pill tone-ok">Member</span>}</div><div className="stock-meta">{o.customerName}{o.customerContact ? ` · ${o.customerContact}` : ""} · {fmtDate(o.createdAt)}{o.createdBy ? ` · by ${o.createdBy}` : ""}</div></div><div className="order-total">{money(o.total)}</div></div>
               <div className="order-items">{o.items.map((it, i) => (<div key={i} className="order-item-row"><span>{it.qty}× {it.name} ({it.size})</span><span>{money(it.qty * it.price)}</span></div>))}</div>
               <div className="order-card-actions">
                 {o.status === "unpaid" && (<><button className="btn btn-primary btn-sm" onClick={() => onPay(o.id)}><Check size={14} /> Mark paid</button><button className="btn btn-ghost btn-sm" onClick={() => onCancel(o.id)}>Cancel order</button></>)}
@@ -1000,6 +1033,7 @@ function OrdersView({ orders, productMap, isAdmin, isSuperAdmin, onNew, onPay, o
 function OrderModal({ products, onClose, onCreate }) {
   const [customerName, setCustomerName] = useState("");
   const [customerContact, setCustomerContact] = useState("");
+  const [isMember, setIsMemberRaw] = useState(false);
   const [productId, setProductId] = useState(products[0]?.id || "");
   const [qty, setQty] = useState(1);
   const [cart, setCart] = useState([]);
@@ -1007,13 +1041,22 @@ function OrderModal({ products, onClose, onCreate }) {
   const available = products.filter((p) => p.stock > 0);
   const selected = products.find((p) => p.id === productId);
   const groupedAvailable = available.reduce((acc, p) => { (acc[p.category] = acc[p.category] || []).push(p); return acc; }, {});
+  const priceFor = (p) => (isMember ? p.memberPrice : p.nonMemberPrice);
+  const setIsMember = (val) => {
+    setIsMemberRaw(val);
+    // Re-price anything already in the cart so it matches the new toggle
+    setCart((c) => c.map((item) => {
+      const prod = products.find((p) => p.id === item.productId);
+      return prod ? { ...item, price: val ? prod.memberPrice : prod.nonMemberPrice } : item;
+    }));
+  };
   const addToCart = () => {
     if (!selected) return setError("Pick an item first");
     const inCart = cart.filter((c) => c.productId === selected.id).reduce((s, c) => s + c.qty, 0);
     if (inCart + Number(qty) > selected.stock) return setError(`Only ${selected.stock - inCart} left of ${selected.name}`);
     if (Number(qty) <= 0) return setError("Quantity must be at least 1");
     setError("");
-    setCart((c) => [...c, { productId: selected.id, name: selected.name, size: selected.size, price: selected.price, qty: Number(qty) }]);
+    setCart((c) => [...c, { productId: selected.id, name: selected.name, size: selected.size, price: priceFor(selected), qty: Number(qty) }]);
     setQty(1);
   };
   const removeItem = (i) => setCart((c) => c.filter((_, idx) => idx !== i));
@@ -1023,6 +1066,12 @@ function OrderModal({ products, onClose, onCreate }) {
       <div className="modal-head"><h2>New order</h2><button className="icon-btn" onClick={onClose}><X size={18} /></button></div>
       <div className="modal-body">
         <div className="field-row"><label>Customer name<input value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="Jamie Lee" autoFocus /></label><label>Contact (optional)<input value={customerContact} onChange={(e) => setCustomerContact(e.target.value)} placeholder="email or phone" /></label></div>
+        <label>Pricing
+          <div className="view-toggle" style={{ marginTop: 4 }}>
+            <button type="button" className={`view-toggle-btn ${!isMember ? "active" : ""}`} onClick={() => setIsMember(false)}>Non-member price</button>
+            <button type="button" className={`view-toggle-btn ${isMember ? "active" : ""}`} onClick={() => setIsMember(true)}>Member price</button>
+          </div>
+        </label>
         <div className="divider" />
         <div className="field-row">
           <label>Item
@@ -1030,7 +1079,7 @@ function OrderModal({ products, onClose, onCreate }) {
               {available.length === 0 && <option value="">No stock available</option>}
               {Object.entries(groupedAvailable).map(([cat, items]) => (
                 <optgroup key={cat} label={cat}>
-                  {items.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.size}) — {p.stock} left</option>)}
+                  {items.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.size}) — {money(priceFor(p))} — {p.stock} left</option>)}
                 </optgroup>
               ))}
             </select>
@@ -1041,7 +1090,7 @@ function OrderModal({ products, onClose, onCreate }) {
         {error && <div className="form-error"><AlertTriangle size={14} /> {error}</div>}
         {cart.length > 0 && (<div className="cart">{cart.map((c, i) => (<div key={i} className="cart-row"><span>{c.qty}× {c.name} ({c.size})</span><span className="cart-row-right">{money(c.qty * c.price)} <button className="icon-btn sm" onClick={() => removeItem(i)}><Trash2 size={14} /></button></span></div>))}<div className="cart-total">Total <strong>{money(total)}</strong></div></div>)}
       </div>
-      <div className="modal-foot"><button className="btn btn-ghost" onClick={onClose}>Cancel</button><button className="btn btn-primary" onClick={() => onCreate(customerName, customerContact, cart)}>Create order</button></div>
+      <div className="modal-foot"><button className="btn btn-ghost" onClick={onClose}>Cancel</button><button className="btn btn-primary" onClick={() => onCreate(customerName, customerContact, cart, isMember)}>Create order</button></div>
     </div></div>
   );
 }
